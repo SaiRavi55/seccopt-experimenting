@@ -1,0 +1,251 @@
+openapi: 3.0.0
+
+info:
+  title: Defender Experts Insights
+  description: >-
+    Skills that retrieve Microsoft Defender XDR incidents, alerts and
+    managed-response incidentTasks via the Microsoft Graph security API,
+    so Security Copilot can summarise how Defender Experts have protected
+    the tenant, produce a MITRE ATT&CK breakdown for true-positive
+    incidents, and build a managed-response output table.
+  version: "v1"
+
+servers:
+  - url: https://graph.microsoft.com/beta
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # 1) List incidents in a date range (with alerts expanded for MITRE breakdown)
+  # ---------------------------------------------------------------------------
+  /security/incidents:
+    get:
+      operationId: ListIncidentsInDateRange
+      summary: List Defender XDR incidents created within a date range, with alerts expanded.
+      description: >-
+        Returns Microsoft Defender XDR incident objects whose createdDateTime
+        falls inside the supplied window. The alerts navigation property is
+        expanded so the response includes each alert's mitreTechniques,
+        category, detectionSource, threatFamilyName and serviceSource - which
+        are needed to build the MITRE ATT&CK breakdown for true-positive
+        incidents.
+
+        Identify Defender-Experts-handled incidents on the client side by
+        checking that ANY of the following is true on the returned incident:
+          - systemTags contains "Defender Experts"
+          - assignedTo == "Defender Experts"
+          - displayName starts with "Defender Experts" (DEN)
+          - any alert.detectionSource starts with "microsoftThreatExperts"
+
+        Useful incident properties returned: id, displayName, severity, status,
+        classification, determination, assignedTo, createdDateTime,
+        lastUpdateDateTime, description (investigation summary from the
+        experts), summary, resolvingComment, systemTags, customTags,
+        priorityScore, incidentWebUrl, recommendedActions, alerts[].
+
+        Use $top up to 100 per page and use the @odata.nextLink in the response
+        to page when needed.
+      parameters:
+        - in: query
+          name: $filter
+          required: true
+          schema:
+            type: string
+          description: >-
+            OData filter on createdDateTime. Use the form
+            "createdDateTime ge {start_date} and createdDateTime le {end_date}"
+            where dates are ISO-8601 UTC, for example
+            "createdDateTime ge 2025-04-01T00:00:00Z and createdDateTime le 2025-04-30T23:59:59Z".
+            You may AND additional clauses such as
+            "and assignedTo eq 'Defender Experts'" or
+            "and severity in ('high','medium')".
+          example: "createdDateTime ge 2025-04-01T00:00:00Z and createdDateTime le 2025-04-30T23:59:59Z"
+        - in: query
+          name: $expand
+          required: false
+          schema:
+            type: string
+            default: alerts
+          description: >-
+            Navigation properties to expand. Use "alerts" so MITRE techniques
+            are returned for the MITRE ATT&CK breakdown.
+          example: alerts
+        - in: query
+          name: $top
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: Page size (max 100). Default 50.
+          example: 50
+        - in: query
+          name: $orderby
+          required: false
+          schema:
+            type: string
+          description: >-
+            Optional ordering. Use "createdDateTime desc" to get the most
+            recent incidents first.
+          example: createdDateTime desc
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json: {}
+        "401":
+          description: Unauthorised - check the SecurityIncident.Read.All consent.
+
+  # ---------------------------------------------------------------------------
+  # 2) Get a single incident by ID (full investigation summary, comments, etc.)
+  # ---------------------------------------------------------------------------
+  /security/incidents/{incidentId}:
+    get:
+      operationId: GetIncidentById
+      summary: Get a single Defender XDR incident, including the Defender Experts investigation summary.
+      description: >-
+        Returns one incident. The "description" property carries the Defender
+        Experts Investigation Summary; "summary" carries the high-level
+        overview; "resolvingComment" carries the close-out reason set by the
+        experts; "recommendedActions" carries the recommendation summary
+        (used for DEN incidents); "classification" and "determination" are
+        used to compute the "Reason" column of the managed-response table.
+
+        Call this skill once per Defender-Experts-handled incident discovered
+        by ListIncidentsInDateRange when you need to build the managed
+        response output table.
+      parameters:
+        - in: path
+          name: incidentId
+          required: true
+          schema:
+            type: string
+          description: The incident ID returned by ListIncidentsInDateRange (e.g. "2972395").
+          example: "2972395"
+        - in: query
+          name: $expand
+          required: false
+          schema:
+            type: string
+          description: >-
+            Optional navigation properties to expand, e.g. "alerts" to include
+            the related alerts and their MITRE techniques.
+          example: alerts
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json: {}
+        "401":
+          description: Unauthorised - check the SecurityIncident.Read.All consent.
+        "404":
+          description: Incident not found.
+
+  # ---------------------------------------------------------------------------
+  # 3) List incident tasks (managed response actions) for one incident
+  # ---------------------------------------------------------------------------
+  /security/incidents/{incidentId}/incidentTasks:
+    get:
+      operationId: ListIncidentTasksForIncident
+      summary: List the managed-response incidentTasks attached to a Defender XDR incident.
+      description: >-
+        Returns the collection of incidentTask objects associated with an
+        incident. Defender Experts managed-response actions have
+        source == "defenderExpertsXDR".
+
+        Each task includes: id, displayName (task title), description (action
+        description / instructions), actionType (e.g. isolateDevice,
+        quarantineFile, restrictAppExecution, releaseFromIsolation,
+        removeAppRestriction, disableUser, manualAction), actionStatus
+        (notStarted, inProgress, completed, failed), status (open / completed
+        / etc.), responseAction (typed payload describing the action),
+        source, createdByDisplayName, lastModifiedByDisplayName,
+        createdDateTime, lastModifiedDateTime.
+
+        Use this skill to populate the "Summary of Managed response" and
+        "Attack outcome" columns of the output table.
+      parameters:
+        - in: path
+          name: incidentId
+          required: true
+          schema:
+            type: string
+          description: The incident ID returned by ListIncidentsInDateRange.
+          example: "2972395"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json: {}
+        "401":
+          description: Unauthorised.
+        "404":
+          description: No tasks for this incident or incident not found.
+
+  # ---------------------------------------------------------------------------
+  # 4) Get a single incidentTask by ID
+  # ---------------------------------------------------------------------------
+  /security/incidentTasks/{incidentTaskId}:
+    get:
+      operationId: GetIncidentTaskById
+      summary: Get a single managed-response incidentTask by its ID.
+      description: >-
+        Returns one incidentTask. Use this if you already have a task ID (for
+        example from a comment or a previous listing) and need its full detail
+        including the typed responseAction payload (e.g.
+        isolateDeviceResponseAction with isolationType and identifierValue).
+      parameters:
+        - in: path
+          name: incidentTaskId
+          required: true
+          schema:
+            type: string
+          description: The incidentTask ID.
+          example: "213213"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json: {}
+        "401":
+          description: Unauthorised.
+        "404":
+          description: Task not found.
+
+  # ---------------------------------------------------------------------------
+  # 5) List alerts for one incident (alternative to $expand=alerts)
+  # ---------------------------------------------------------------------------
+  /security/incidents/{incidentId}/alerts:
+    get:
+      operationId: ListAlertsForIncident
+      summary: List alerts belonging to a Defender XDR incident (for MITRE mapping).
+      description: >-
+        Returns the alerts associated with the incident. Each alert exposes
+        mitreTechniques (e.g. ["T1078","T1110"]), category (often the MITRE
+        tactic such as "InitialAccess", "CredentialAccess", "Execution"),
+        detectionSource (use "microsoftThreatExperts*" to confirm a Defender
+        Experts hunt-derived alert / DEN), threatFamilyName and
+        serviceSource. Use this when you only need the alerts and did not
+        expand them on the parent incident call.
+      parameters:
+        - in: path
+          name: incidentId
+          required: true
+          schema:
+            type: string
+          description: The incident ID.
+          example: "2972395"
+        - in: query
+          name: $top
+          required: false
+          schema:
+            type: integer
+            default: 50
+          description: Page size.
+          example: 50
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json: {}
+        "401":
+          description: Unauthorised - check the SecurityAlert.Read.All consent.
