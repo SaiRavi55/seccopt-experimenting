@@ -33,6 +33,7 @@ paths:
         Identify Defender-Experts-handled incidents on the client side by
         checking that ANY of the following is true on the returned incident:
           - systemTags contains "Defender Experts"
+          - customTags contains "Defender Experts"
           - assignedTo == "Defender Experts"
           - displayName starts with "Defender Experts" (DEN)
           - any alert.detectionSource starts with "microsoftThreatExperts"
